@@ -2,15 +2,23 @@ import { useEffect, useState, useRef } from 'react';
 import socket from '../socket';
 
 export default function Chat({ username, room }) {
-  const [messages, setMessages]     = useState([]);
-  const [users, setUsers]           = useState([]);
-  const [text, setText]             = useState('');
-  const [typing, setTyping]         = useState('');
-  const [connected, setConnected]   = useState(true);
-  const [sidebarOpen, setSidebar]   = useState(true);
-  const bottomRef   = useRef(null);
-  const typingTimer = useRef(null);
-  const inputRef    = useRef(null);
+  const [messages, setMessages]   = useState([]);
+  const [users, setUsers]         = useState([]);
+  const [text, setText]           = useState('');
+  const [typing, setTyping]       = useState('');
+  const [connected, setConnected] = useState(true);
+  const [sidebarOpen, setSidebar] = useState(true);
+
+  // 🆕 DM state
+  const [activeDM, setActiveDM]   = useState(null);   // username of open DM
+  const [dms, setDms]             = useState({});      // { username: [{ from, message, timestamp, read }] }
+  const [dmText, setDmText]       = useState('');
+
+  const bottomRef    = useRef(null);
+  const dmBottomRef  = useRef(null);
+  const typingTimer  = useRef(null);
+  const inputRef     = useRef(null);
+  const dmInputRef   = useRef(null);
 
   useEffect(() => {
     socket.emit('join_room', { username, room });
@@ -23,9 +31,29 @@ export default function Chat({ username, room }) {
     socket.on('disconnect',       ()   => setConnected(false));
     socket.on('connect',          ()   => setConnected(true));
 
+    // 🆕 Receive private message
+    socket.on('private_message', ({ from, to, message, timestamp }) => {
+      const peer = from === username ? to : from;
+      setDms(prev => ({
+        ...prev,
+        [peer]: [...(prev[peer] || []), { from, message, timestamp, read: false }]
+      }));
+    });
+
+    // 🆕 Read receipt received — mark messages as read
+    socket.on('message_read', ({ by }) => {
+      setDms(prev => ({
+        ...prev,
+        [by]: prev[by]?.map(msg =>
+          msg.from === username ? { ...msg, read: true } : msg
+        )
+      }));
+    });
+
     return () => {
       ['message_history','receive_message','room_users',
-       'user_typing','user_stop_typing','disconnect','connect']
+       'user_typing','user_stop_typing','disconnect','connect',
+       'private_message','message_read']
         .forEach(e => socket.off(e));
     };
   }, [room]);
@@ -33,6 +61,30 @@ export default function Chat({ username, room }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    dmBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [dms, activeDM]);
+
+  // 🆕 Open DM — also emits read receipt
+  const openDM = (peer) => {
+    if (peer === username) return; // can't DM yourself
+    setActiveDM(peer);
+    socket.emit('message_read', { by: username, from: peer });
+    setTimeout(() => dmInputRef.current?.focus(), 100);
+  };
+
+  // 🆕 Send DM
+  const sendDM = () => {
+    if (!dmText.trim()) return;
+    socket.emit('private_message', { to: activeDM, message: dmText.trim() });
+    setDmText('');
+    dmInputRef.current?.focus();
+  };
+
+  // 🆕 Unread count per user
+  const unreadCount = (peer) =>
+    (dms[peer] || []).filter(m => m.from === peer && !m.read).length;
 
   const sendMessage = () => {
     if (!text.trim()) return;
@@ -52,9 +104,9 @@ export default function Chat({ username, room }) {
     );
   };
 
-  const fmt = ts => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const isSystem = m => m.username === 'System';
-  const isMine   = m => m.username === username;
+  const fmt      = ts => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const isSystem = m  => m.username === 'System';
+  const isMine   = m  => m.username === username;
 
   return (
     <div className="h-screen bg-gray-950 flex overflow-hidden">
@@ -92,7 +144,11 @@ export default function Chat({ username, room }) {
           </p>
           <div className="space-y-2">
             {users.map(u => (
-              <div key={u.id} className="flex items-center gap-2.5">
+              <div key={u.id}
+                onClick={() => openDM(u.username)}
+                className={`flex items-center gap-2.5 rounded-lg p-1.5 transition cursor-pointer
+                  ${u.username === username ? '' : 'hover:bg-gray-800'}
+                  ${activeDM === u.username ? 'bg-gray-800' : ''}`}>
                 <div className="relative flex-shrink-0">
                   <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center
                                   text-sm font-semibold text-white">
@@ -101,10 +157,17 @@ export default function Chat({ username, room }) {
                   <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-teal-400
                                    rounded-full border-2 border-gray-900"/>
                 </div>
-                <span className={`text-sm truncate
+                <span className={`text-sm truncate flex-1
                   ${u.username === username ? 'text-teal-400 font-medium' : 'text-gray-300'}`}>
                   {u.username}{u.username === username ? ' (you)' : ''}
                 </span>
+                {/* 🆕 Unread badge */}
+                {unreadCount(u.username) > 0 && (
+                  <span className="w-5 h-5 bg-teal-500 rounded-full text-white text-xs
+                                   flex items-center justify-center font-bold flex-shrink-0">
+                    {unreadCount(u.username)}
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -126,138 +189,215 @@ export default function Chat({ username, room }) {
       </div>
 
       {/* ── Main area ── */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex min-w-0">
 
-        {/* Header */}
-        <div className="px-4 py-3 border-b border-gray-800 bg-gray-900 flex items-center gap-3">
-          <button onClick={() => setSidebar(p => !p)}
-            className="text-gray-400 hover:text-white transition p-1 rounded-lg hover:bg-gray-800">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16"/>
-            </svg>
-          </button>
-          <div>
-            <h2 className="text-white font-semibold text-sm"># {room}</h2>
-            <p className="text-gray-500 text-xs">{users.length} online</p>
-          </div>
-          {!connected && (
-            <div className="ml-auto flex items-center gap-1.5 bg-red-500/10 border border-red-500/20
-                            text-red-400 text-xs px-3 py-1 rounded-full">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-400"/>
-              Reconnecting...
-            </div>
-          )}
-        </div>
+        {/* Room chat — shrinks when DM panel is open */}
+        <div className={`${activeDM ? 'hidden md:flex' : 'flex'} flex-1 flex-col min-w-0`}>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4">
-          {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="w-14 h-14 bg-gray-800 rounded-2xl flex items-center justify-center mb-3">
-                <svg className="w-7 h-7 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
-                </svg>
-              </div>
-              <p className="text-gray-400 font-medium text-sm">No messages yet</p>
-              <p className="text-gray-600 text-xs mt-1">Be first to say something in #{room}</p>
-            </div>
-          )}
-
-          <div className="space-y-0.5">
-            {messages.map((msg, i) => {
-              if (isSystem(msg)) return (
-                <div key={i} className="flex justify-center py-2">
-                  <span className="text-xs text-gray-600 bg-gray-800/60 px-3 py-1 rounded-full">
-                    {msg.text}
-                  </span>
-                </div>
-              );
-
-              const mine       = isMine(msg);
-              const prev       = messages[i - 1];
-              const grouped    = prev && !isSystem(prev) && prev.username === msg.username;
-
-              return (
-                <div key={i}
-                  className={`flex gap-3 ${mine ? 'flex-row-reverse' : ''} ${grouped ? 'mt-0.5' : 'mt-4'}`}>
-
-                  {/* Avatar */}
-                  {!grouped
-                    ? <div className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center
-                                       justify-content-center items-center text-sm font-bold text-white
-                                       ${mine ? 'bg-teal-600' : 'bg-gray-700'}`}>
-                        <span className="w-full text-center">{msg.username[0].toUpperCase()}</span>
-                      </div>
-                    : <div className="w-8 flex-shrink-0"/>
-                  }
-
-                  <div className={`flex flex-col max-w-xs lg:max-w-sm xl:max-w-md
-                                   ${mine ? 'items-end' : 'items-start'}`}>
-                    {!grouped && (
-                      <div className={`flex items-baseline gap-2 mb-1
-                                       ${mine ? 'flex-row-reverse' : ''}`}>
-                        <span className="text-xs font-semibold text-white">{msg.username}</span>
-                        <span className="text-xs text-gray-600">{fmt(msg.timestamp)}</span>
-                      </div>
-                    )}
-                    <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed
-                      ${mine
-                        ? 'bg-teal-600 text-white rounded-tr-sm'
-                        : 'bg-gray-800 text-gray-100 rounded-tl-sm'}`}>
-                      {msg.text}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Typing indicator */}
-          {typing && (
-            <div className="flex items-center gap-2 mt-3 ml-11">
-              <div className="flex gap-1 px-3 py-2 bg-gray-800 rounded-2xl rounded-tl-sm w-fit">
-                {[0,150,300].map(d => (
-                  <span key={d} className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"
-                        style={{ animationDelay: `${d}ms` }}/>
-                ))}
-              </div>
-              <span className="text-xs text-gray-500">{typing}</span>
-            </div>
-          )}
-
-          <div ref={bottomRef}/>
-        </div>
-
-        {/* Input bar */}
-        <div className="p-4 border-t border-gray-800 bg-gray-900">
-          <div className="flex gap-2 items-center">
-            <div className="flex-1 flex items-center bg-gray-800 border border-gray-700
-                            rounded-2xl px-4 focus-within:border-teal-500 transition">
-              <input
-                ref={inputRef}
-                type="text"
-                value={text}
-                onChange={handleTyping}
-                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                placeholder={`Message #${room}...`}
-                className="flex-1 bg-transparent text-white placeholder-gray-500 text-sm
-                           py-3 focus:outline-none"
-              />
-            </div>
-            <button onClick={sendMessage} disabled={!text.trim()}
-              className="w-11 h-11 bg-teal-500 hover:bg-teal-400 disabled:bg-gray-700
-                         disabled:cursor-not-allowed text-white rounded-xl flex items-center
-                         justify-center transition active:scale-95 flex-shrink-0">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {/* Header */}
+          <div className="px-4 py-3 border-b border-gray-800 bg-gray-900 flex items-center gap-3">
+            <button onClick={() => setSidebar(p => !p)}
+              className="text-gray-400 hover:text-white transition p-1 rounded-lg hover:bg-gray-800">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                  d="M4 6h16M4 12h16M4 18h16"/>
               </svg>
             </button>
+            <div>
+              <h2 className="text-white font-semibold text-sm"># {room}</h2>
+              <p className="text-gray-500 text-xs">{users.length} online</p>
+            </div>
+            {!connected && (
+              <div className="ml-auto flex items-center gap-1.5 bg-red-500/10 border border-red-500/20
+                              text-red-400 text-xs px-3 py-1 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400"/>
+                Reconnecting...
+              </div>
+            )}
           </div>
-          <p className="text-gray-700 text-xs mt-2 text-center">Enter to send</p>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            {messages.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <div className="w-14 h-14 bg-gray-800 rounded-2xl flex items-center justify-center mb-3">
+                  <svg className="w-7 h-7 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                  </svg>
+                </div>
+                <p className="text-gray-400 font-medium text-sm">No messages yet</p>
+                <p className="text-gray-600 text-xs mt-1">Be first to say something in #{room}</p>
+              </div>
+            )}
+            <div className="space-y-0.5">
+              {messages.map((msg, i) => {
+                if (isSystem(msg)) return (
+                  <div key={i} className="flex justify-center py-2">
+                    <span className="text-xs text-gray-600 bg-gray-800/60 px-3 py-1 rounded-full">
+                      {msg.text}
+                    </span>
+                  </div>
+                );
+                const mine    = isMine(msg);
+                const prev    = messages[i - 1];
+                const grouped = prev && !isSystem(prev) && prev.username === msg.username;
+                return (
+                  <div key={i}
+                    className={`flex gap-3 ${mine ? 'flex-row-reverse' : ''} ${grouped ? 'mt-0.5' : 'mt-4'}`}>
+                    {!grouped
+                      ? <div className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center
+                                         justify-center text-sm font-bold text-white
+                                         ${mine ? 'bg-teal-600' : 'bg-gray-700'}`}>
+                          <span className="w-full text-center">{msg.username[0].toUpperCase()}</span>
+                        </div>
+                      : <div className="w-8 flex-shrink-0"/>
+                    }
+                    <div className={`flex flex-col max-w-xs lg:max-w-sm xl:max-w-md
+                                     ${mine ? 'items-end' : 'items-start'}`}>
+                      {!grouped && (
+                        <div className={`flex items-baseline gap-2 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
+                          <span className="text-xs font-semibold text-white">{msg.username}</span>
+                          <span className="text-xs text-gray-600">{fmt(msg.timestamp)}</span>
+                        </div>
+                      )}
+                      <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed
+                        ${mine
+                          ? 'bg-teal-600 text-white rounded-tr-sm'
+                          : 'bg-gray-800 text-gray-100 rounded-tl-sm'}`}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {typing && (
+              <div className="flex items-center gap-2 mt-3 ml-11">
+                <div className="flex gap-1 px-3 py-2 bg-gray-800 rounded-2xl rounded-tl-sm w-fit">
+                  {[0,150,300].map(d => (
+                    <span key={d} className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"
+                          style={{ animationDelay: `${d}ms` }}/>
+                  ))}
+                </div>
+                <span className="text-xs text-gray-500">{typing}</span>
+              </div>
+            )}
+            <div ref={bottomRef}/>
+          </div>
+
+          {/* Input bar */}
+          <div className="p-4 border-t border-gray-800 bg-gray-900">
+            <div className="flex gap-2 items-center">
+              <div className="flex-1 flex items-center bg-gray-800 border border-gray-700
+                              rounded-2xl px-4 focus-within:border-teal-500 transition">
+                <input ref={inputRef} type="text" value={text} onChange={handleTyping}
+                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                  placeholder={`Message #${room}...`}
+                  className="flex-1 bg-transparent text-white placeholder-gray-500 text-sm
+                             py-3 focus:outline-none"/>
+              </div>
+              <button onClick={sendMessage} disabled={!text.trim()}
+                className="w-11 h-11 bg-teal-500 hover:bg-teal-400 disabled:bg-gray-700
+                           disabled:cursor-not-allowed text-white rounded-xl flex items-center
+                           justify-center transition active:scale-95 flex-shrink-0">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                </svg>
+              </button>
+            </div>
+            <p className="text-gray-700 text-xs mt-2 text-center">Enter to send</p>
+          </div>
         </div>
+
+        {/* 🆕 DM Panel */}
+        {activeDM && (
+          <div className="w-full md:w-80 lg:w-96 flex flex-col border-l border-gray-800 bg-gray-950">
+
+            {/* DM Header */}
+            <div className="px-4 py-3 border-b border-gray-800 bg-gray-900 flex items-center gap-3">
+              <button onClick={() => setActiveDM(null)}
+                className="text-gray-400 hover:text-white transition p-1 rounded-lg hover:bg-gray-800">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+                </svg>
+              </button>
+              <div className="w-7 h-7 rounded-full bg-gray-700 flex items-center justify-center
+                              text-sm font-bold text-white flex-shrink-0">
+                {activeDM[0].toUpperCase()}
+              </div>
+              <div>
+                <p className="text-white text-sm font-semibold">{activeDM}</p>
+                <p className="text-gray-500 text-xs">Direct message</p>
+              </div>
+            </div>
+
+            {/* DM Messages */}
+            <div className="flex-1 overflow-y-auto px-4 py-4">
+              {!(dms[activeDM]?.length) && (
+                <div className="flex flex-col items-center justify-center h-full text-center">
+                  <p className="text-gray-500 text-sm">No messages yet</p>
+                  <p className="text-gray-600 text-xs mt-1">Say hi to {activeDM}!</p>
+                </div>
+              )}
+              <div className="space-y-1">
+                {(dms[activeDM] || []).map((msg, i) => {
+                  const mine = msg.from === username;
+                  return (
+                    <div key={i} className={`flex gap-2 ${mine ? 'flex-row-reverse' : ''} mt-3`}>
+                      <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center
+                                       justify-center text-xs font-bold text-white
+                                       ${mine ? 'bg-teal-600' : 'bg-gray-700'}`}>
+                        {msg.from[0].toUpperCase()}
+                      </div>
+                      <div className={`flex flex-col max-w-xs ${mine ? 'items-end' : 'items-start'}`}>
+                        <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed
+                          ${mine
+                            ? 'bg-teal-600 text-white rounded-tr-sm'
+                            : 'bg-gray-800 text-gray-100 rounded-tl-sm'}`}>
+                          {msg.message}
+                        </div>
+                        {/* 🆕 Read receipt ticks */}
+                        {mine && (
+                          <span className={`text-xs mt-0.5 transition-colors
+                            ${msg.read ? 'text-teal-400' : 'text-gray-600'}`}>
+                            {msg.read ? '✓✓ seen' : '✓ sent'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div ref={dmBottomRef}/>
+            </div>
+
+            {/* DM Input */}
+            <div className="p-4 border-t border-gray-800 bg-gray-900">
+              <div className="flex gap-2 items-center">
+                <div className="flex-1 flex items-center bg-gray-800 border border-gray-700
+                                rounded-2xl px-4 focus-within:border-teal-500 transition">
+                  <input ref={dmInputRef} type="text" value={dmText}
+                    onChange={e => setDmText(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && sendDM()}
+                    placeholder={`Message ${activeDM}...`}
+                    className="flex-1 bg-transparent text-white placeholder-gray-500 text-sm
+                               py-3 focus:outline-none"/>
+                </div>
+                <button onClick={sendDM} disabled={!dmText.trim()}
+                  className="w-11 h-11 bg-teal-500 hover:bg-teal-400 disabled:bg-gray-700
+                             disabled:cursor-not-allowed text-white rounded-xl flex items-center
+                             justify-center transition active:scale-95 flex-shrink-0">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
