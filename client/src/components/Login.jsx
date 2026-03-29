@@ -1,22 +1,64 @@
 import { useState } from 'react';
 
 const ROOMS = ['general', 'tech', 'random', 'jobs'];
+const BASE  = 'https://chat-app-production-64cd.up.railway.app';
 
 export default function Login({ onJoin }) {
+  const [tab, setTab]           = useState('login');     // 'login' | 'register'
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [room, setRoom]         = useState('general');
   const [error, setError]       = useState('');
+  const [loading, setLoading]   = useState(false);
+  const [success, setSuccess]   = useState('');
 
-  const handleJoin = () => {
+  const handleSubmit = async () => {
     if (!username.trim()) { setError('Please enter a username'); return; }
-    onJoin(username.trim(), room);
+    if (!password.trim()) { setError('Please enter a password'); return; }
+
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res  = await fetch(`${BASE}/auth/${tab}`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ username: username.trim(), password }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || 'Something went wrong');
+        setLoading(false);
+        return;
+      }
+
+      if (tab === 'register') {
+        // After register, auto switch to login
+        setSuccess('Registered! Please log in.');
+        setTab('login');
+        setPassword('');
+        setLoading(false);
+        return;
+      }
+
+      // Login success
+      localStorage.setItem('token',    data.token);
+      localStorage.setItem('username', data.username);
+      onJoin(data.username, room);
+
+    } catch (e) {
+      setError('Network error — is the server running?');
+      setLoading(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
 
-        {/* Logo */}
+        {/* Logo — unchanged from your original */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 bg-teal-500 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -28,18 +70,53 @@ export default function Login({ onJoin }) {
           <p className="text-gray-400 mt-1 text-sm">Real-time messaging · Socket.io · Node.js · React</p>
         </div>
 
-        {/* Card */}
         <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
 
+          {/* 🆕 Tabs */}
+          <div className="flex bg-gray-800 rounded-xl p-1 mb-5">
+            {['login', 'register'].map(t => (
+              <button key={t} onClick={() => { setTab(t); setError(''); setSuccess(''); }}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition capitalize
+                  ${tab === t
+                    ? 'bg-teal-500 text-white'
+                    : 'text-gray-400 hover:text-white'}`}>
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {/* Success message */}
+          {success && (
+            <div className="mb-4 px-4 py-2.5 bg-teal-500/10 border border-teal-500/20
+                            text-teal-400 text-sm rounded-xl">
+              {success}
+            </div>
+          )}
+
           {/* Username */}
-          <div className="mb-5">
-            <label className="block text-sm font-medium text-gray-300 mb-2">Your username</label>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-300 mb-2">Username</label>
             <input
               type="text"
               placeholder="e.g. Trupti"
               value={username}
               onChange={e => { setUsername(e.target.value); setError(''); }}
-              onKeyDown={e => e.key === 'Enter' && handleJoin()}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+              className="w-full bg-gray-800 text-white placeholder-gray-500 border border-gray-700
+                         rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500
+                         focus:ring-1 focus:ring-teal-500 transition"
+            />
+          </div>
+
+          {/* 🆕 Password */}
+          <div className="mb-5">
+            <label className="block text-sm font-medium text-gray-300 mb-2">Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={password}
+              onChange={e => { setPassword(e.target.value); setError(''); }}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
               className="w-full bg-gray-800 text-white placeholder-gray-500 border border-gray-700
                          rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500
                          focus:ring-1 focus:ring-teal-500 transition"
@@ -47,26 +124,29 @@ export default function Login({ onJoin }) {
             {error && <p className="text-red-400 text-xs mt-1.5">{error}</p>}
           </div>
 
-          {/* Room picker */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">Choose a room</label>
-            <div className="grid grid-cols-2 gap-2">
-              {ROOMS.map(r => (
-                <button key={r} onClick={() => setRoom(r)}
-                  className={`py-2.5 px-4 rounded-xl text-sm font-medium transition border
-                    ${room === r
-                      ? 'bg-teal-500 text-white border-teal-500'
-                      : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-teal-600 hover:text-white'}`}>
-                  # {r}
-                </button>
-              ))}
+          {/* Room picker — only show on login tab */}
+          {tab === 'login' && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Choose a room</label>
+              <div className="grid grid-cols-2 gap-2">
+                {ROOMS.map(r => (
+                  <button key={r} onClick={() => setRoom(r)}
+                    className={`py-2.5 px-4 rounded-xl text-sm font-medium transition border
+                      ${room === r
+                        ? 'bg-teal-500 text-white border-teal-500'
+                        : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-teal-600 hover:text-white'}`}>
+                    # {r}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          <button onClick={handleJoin}
-            className="w-full bg-teal-500 hover:bg-teal-400 active:scale-95 text-white
-                       font-semibold py-3 rounded-xl transition text-sm">
-            Join Room →
+          <button onClick={handleSubmit} disabled={loading}
+            className="w-full bg-teal-500 hover:bg-teal-400 active:scale-95 disabled:bg-gray-700
+                       disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl
+                       transition text-sm">
+            {loading ? 'Please wait...' : tab === 'login' ? 'Join Room →' : 'Create Account →'}
           </button>
         </div>
 
