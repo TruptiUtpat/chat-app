@@ -27,16 +27,17 @@ module.exports = (io) => {
   io.on('connection', (socket) => {
 
     // 🆕 ADD THIS — private message handler
-    socket.on('private_message', ({ to, message }) => {
-      const targetSocketId = onlineUsers[to];
-      const from = socket.user?.username || socket.username;
-      const payload = { from, message, timestamp: Date.now() };
+  
+socket.on('private_message', ({ to, message }) => {
+  const targetSocketId = onlineUsers[to];
+  const from = socket.user?.username || socket.username;
+  const payload = { from, to, message, timestamp: Date.now() }; // ✅ to is now in both emits
 
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('private_message', payload);
-      }
-      socket.emit('private_message', { ...payload, to });
-    });
+  if (targetSocketId) {
+    io.to(targetSocketId).emit('private_message', payload); // ✅ siya receives { from: 'ram', to: 'siya', ... }
+  }
+  socket.emit('private_message', payload); // ✅ ram receives { from: 'ram', to: 'siya', ... }
+});
 
     // 🆕 ADD THIS — read receipt handler
     socket.on('message_read', ({ by, from }) => {

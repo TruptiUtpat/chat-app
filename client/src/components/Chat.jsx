@@ -33,8 +33,9 @@ export default function Chat({ username, room }) {
 
     // 🆕 Receive private message
   
+
 socket.on('private_message', ({ from, to, message, timestamp }) => {
-  const peer = from === username ? to : from;
+  const peer = from === username ? to : from; // ram's view: peer = 'siya' | siya's view: peer = 'ram'
   setDms(prev => ({
     ...prev,
     [peer]: [...(prev[peer] || []), { from, to, message, timestamp, read: false }]
