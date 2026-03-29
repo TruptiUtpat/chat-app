@@ -32,13 +32,14 @@ export default function Chat({ username, room }) {
     socket.on('connect',          ()   => setConnected(true));
 
     // 🆕 Receive private message
-    socket.on('private_message', ({ from, to, message, timestamp }) => {
-      const peer = from === username ? to : from;
-      setDms(prev => ({
-        ...prev,
-        [peer]: [...(prev[peer] || []), { from, message, timestamp, read: false }]
-      }));
-    });
+  
+socket.on('private_message', ({ from, to, message, timestamp }) => {
+  const peer = from === username ? to : from;
+  setDms(prev => ({
+    ...prev,
+    [peer]: [...(prev[peer] || []), { from, to, message, timestamp, read: false }]
+  }));
+});
 
     // 🆕 Read receipt received — mark messages as read
     socket.on('message_read', ({ by }) => {
@@ -67,12 +68,22 @@ export default function Chat({ username, room }) {
   }, [dms, activeDM]);
 
   // 🆕 Open DM — also emits read receipt
-  const openDM = (peer) => {
-    if (peer === username) return; // can't DM yourself
-    setActiveDM(peer);
-    socket.emit('message_read', { by: username, from: peer });
-    setTimeout(() => dmInputRef.current?.focus(), 100);
-  };
+  // FIXED — also clears unread locally when opening DM
+const openDM = (peer) => {
+  if (peer === username) return;
+  setActiveDM(peer);
+  socket.emit('message_read', { by: username, from: peer });
+
+  // Mark all messages from this peer as read locally
+  setDms(prev => ({
+    ...prev,
+    [peer]: (prev[peer] || []).map(msg =>
+      msg.from === peer ? { ...msg, read: true } : msg
+    )
+  }));
+
+  setTimeout(() => dmInputRef.current?.focus(), 100);
+};
 
   // 🆕 Send DM
   const sendDM = () => {
