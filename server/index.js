@@ -9,6 +9,10 @@ const app = express();
 app.use(cors({ origin: process.env.CLIENT_URL }));
 app.use(express.json());
 
+// 🆕 ADD THESE TWO LINES ONLY — everything else stays exactly the same
+const authRoutes = require('./routes/auth');
+app.use('/auth', authRoutes);
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL, methods: ['GET','POST'] }
